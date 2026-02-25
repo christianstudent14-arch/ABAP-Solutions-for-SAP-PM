@@ -1,0 +1,212 @@
+*& ------------------------------------------------------------------------------------------
+*&                        ,---.
+*&                       /    |
+*&                      /     |
+*&                     /      |
+*&                    /       |
+*&               ___,'        |
+*&             <  -'          :
+*&              `-.__..--'``-,_\_
+*&                 |o/ <o>` :,.)_`>
+*&                 :/ `     ||/)
+*&                 (_.).__,-` |\
+*&                 /( `.``   `| :
+*&                 \'`-.)  `  ; ;
+*&                 | `       /-<
+*&                 |     `  /   `.
+*& ,-_-..____     /|  `    :__..-'\
+*&/,'-.__\\  ``-./ :`      ;       \
+*&`\ `\  `\\  \ :  (   `  /  ,   `. \
+*&  \` \   \\   |  | `   :  :     .\ \
+*&   \ `\_  ))  :  ;     |  |      ): :
+*&  (`-.-'\ ||  |\ \   ` ;  ;       | |
+*&   \-_   `;;._   ( `  /  /_       | |
+*&    `-.-.// ,'`-._\__/_,'         ; |
+*&       \:: :     /     `     ,   /  |
+*&        || |    (        ,' /   /   |
+*&        ||                ,'   /    |
+*&-------------------------------------------------------------------------------------------*
+*&-------------------------------------------------------------------------------------------*
+*&     Upload von Transportdateien (K/R) vom Client Rechner auf den Applikationsserver
+*&
+*&    Ziel:
+*&     - K-Datei -> DIR_TRANS\cofiles
+*&     - R-Datei -> DIR_TRANS\data
+*&
+*&    Voraussetzungen:
+*&     - Dialogbetrieb (GUI_UPLOAD)
+*&     - Zielverzeichnisse sind in AL11 erreichbar und Schreibrechte vorhanden (S_DATASET)
+*&-------------------------------------------------------------------------------------------*
+*& Author     : ProjectNautilus101
+*& date       : 20.02.2026
+*& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
+*&              Sonstiges/others  ( )                  Modulpool   ( )
+*&
+*&-------------------------------------------------------------------------------------------*
+*& Änderungshistorie
+*& Datum:      Benutzer:                  Grund:
+*& ---------- ----------------- -------------------------------------------------------------*
+*&-------------------------------------------------------------------------------------------*
+*&-------------------------------------------------------------------------------------------*
+
+REPORT y_pm_transport_upload NO STANDARD PAGE HEADING.
+
+PARAMETERS:
+  p_k_loc  TYPE string OBLIGATORY,  "Lokaler Pfad zur K-Datei
+  p_r_loc  TYPE string OBLIGATORY,  "Lokaler Pfad zur R-Datei
+
+  p_co_dir TYPE epsdirnam OBLIGATORY DEFAULT '\\**********************\sapmnt\trans\cofiles',
+  p_da_dir TYPE epsdirnam OBLIGATORY DEFAULT '\\**********************\sapmnt\trans\data',
+
+  p_over   AS CHECKBOX DEFAULT ' '.  "Überschreiben falls existiert
+
+START-OF-SELECTION.
+
+  IF sy-batch = 'X'.
+    MESSAGE 'Report muss im Dialog (SAP GUI) laufen, nicht im Hintergrund.' TYPE 'E'.
+  ENDIF.
+
+  PERFORM upload_file USING p_k_loc p_co_dir 'K'.
+  PERFORM upload_file USING p_r_loc p_da_dir 'R'.
+
+  WRITE: / 'Fertig. Danach STMS: Import Queue -> Transport(e) anhängen / einlesen.'.
+
+*-----------------------------------------------------------------------
+* Upload einer Datei vom PC auf den Applikationsserver (byte-genau)
+*-----------------------------------------------------------------------
+FORM upload_file USING iv_local   TYPE string
+                       iv_targetd TYPE epsdirnam
+                       iv_prefix  TYPE c.
+
+  DATA: lt_bin      TYPE solix_tab,
+        lv_xstr     TYPE xstring,
+        lv_xlen     TYPE i,
+        lv_fname    TYPE string,
+        lv_path     TYPE string,
+        lv_target   TYPE string,
+        lv_len      TYPE i,
+        lv_off      TYPE i,
+        lv_lastc    TYPE c LENGTH 1.
+
+  CLEAR: lt_bin, lv_xstr, lv_fname, lv_path, lv_target.
+
+  "Dateiname aus lokalem Pfad extrahieren
+  CALL FUNCTION 'SO_SPLIT_FILE_AND_PATH'
+    EXPORTING
+      full_name     = iv_local
+    IMPORTING
+      stripped_name = lv_fname
+      file_path     = lv_path
+    EXCEPTIONS
+      x_error       = 1
+      OTHERS        = 2.
+
+  IF sy-subrc <> 0 OR lv_fname IS INITIAL.
+    MESSAGE 'Konnte Dateiname aus lokalem Pfad nicht ermitteln.' TYPE 'E'.
+  ENDIF.
+
+  "Prefix prüfen (nur Warnung)
+  IF lv_fname(1) <> iv_prefix.
+    MESSAGE 'Warnung: Dateiname hat nicht den erwarteten Prefix (K/R).' TYPE 'W'.
+  ENDIF.
+
+  "Zielpfad zusammenbauen
+  lv_target = iv_targetd.
+
+  "Sicherstellen: Separator am Ende vorhanden (\ oder /)
+  lv_len = strlen( lv_target ).
+  IF lv_len > 0.
+    lv_off   = lv_len - 1.
+    lv_lastc = lv_target+lv_off(1).
+    IF lv_lastc <> '\' AND lv_lastc <> '/'.
+      CONCATENATE lv_target '\' INTO lv_target.
+    ENDIF.
+  ENDIF.
+
+  CONCATENATE lv_target lv_fname INTO lv_target.
+
+  WRITE: / 'Upload:', iv_local, ' -> ', lv_target.
+
+  "Existenz prüfen (wenn Overwrite aus)
+  IF p_over = space.
+    OPEN DATASET lv_target FOR INPUT IN BINARY MODE.
+    IF sy-subrc = 0.
+      CLOSE DATASET lv_target.
+      MESSAGE 'Zieldatei existiert bereits (Overwrite ist aus).' TYPE 'E'.
+    ENDIF.
+  ENDIF.
+
+  "Lokale Datei lesen
+  CLEAR lt_bin.
+  CALL FUNCTION 'GUI_UPLOAD'
+    EXPORTING
+      filename                = iv_local
+      filetype                = 'BIN'
+    TABLES
+      data_tab                = lt_bin
+    EXCEPTIONS
+      file_open_error         = 1
+      file_read_error         = 2
+      no_batch                = 3
+      gui_refuse_filetransfer = 4
+      invalid_type            = 5
+      no_authority            = 6
+      unknown_error           = 7
+      bad_data_format         = 8
+      header_not_allowed      = 9
+      separator_not_allowed   = 10
+      header_too_long         = 11
+      unknown_dp_error        = 12
+      access_denied           = 13
+      dp_out_of_memory        = 14
+      disk_full               = 15
+      dp_timeout              = 16
+      OTHERS                  = 17.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'GUI_UPLOAD fehlgeschlagen (lokale Datei konnte nicht gelesen werden).' TYPE 'E'.
+  ENDIF.
+
+  IF lt_bin[] IS INITIAL.
+    MESSAGE 'Lokale Datei ist leer oder konnte nicht gelesen werden.' TYPE 'E'.
+  ENDIF.
+
+  "SOLIX_TAB -> XSTRING (byte-exakt)
+  CLEAR lv_xstr.
+  CALL FUNCTION 'SCMS_BINARY_TO_XSTRING'
+    EXPORTING
+      input_length = 0             "0 = komplette Tabelle
+    IMPORTING
+      buffer       = lv_xstr
+    TABLES
+      binary_tab   = lt_bin
+    EXCEPTIONS
+      failed       = 1
+      OTHERS       = 2.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'SCMS_BINARY_TO_XSTRING fehlgeschlagen.' TYPE 'E'.
+  ENDIF.
+
+  lv_xlen = xstrlen( lv_xstr ).
+  IF lv_xlen <= 0.
+    MESSAGE 'XSTRING ist leer (keine Daten zum Schreiben).' TYPE 'E'.
+  ENDIF.
+
+  "Auf Applikationsserver schreiben
+  OPEN DATASET lv_target FOR OUTPUT IN BINARY MODE.
+  IF sy-subrc <> 0.
+    MESSAGE 'OPEN DATASET (OUTPUT) fehlgeschlagen. Prüfe AL11-Pfad & S_DATASET.' TYPE 'E'.
+  ENDIF.
+
+  TRANSFER lv_xstr TO lv_target.
+  IF sy-subrc <> 0.
+    CLOSE DATASET lv_target.
+    MESSAGE 'Schreiben (TRANSFER XSTRING) fehlgeschlagen.' TYPE 'E'.
+  ENDIF.
+
+  CLOSE DATASET lv_target.
+
+  WRITE: / 'OK: Datei erfolgreich (byte-genau) hochgeladen. Bytes:', lv_xlen.
+
+ENDFORM.
