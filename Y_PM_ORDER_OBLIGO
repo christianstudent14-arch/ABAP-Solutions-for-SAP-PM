@@ -1,0 +1,284 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_ORDER_OBLIGO
+*&---------------------------------------------------------------------*
+*& Der Report listet alle Instandhaltungsaufträge eines Jahres auf,
+*& die technisch abgeschlossen (TECO) sind und dennoch offene
+*& Bestellpositionen besitzen.Pro Auftrag wird die Anzahl offener
+*& Positionen sowie eine relevante Bestellnummer angezeigt.
+*& Durch Doppelklick auf die Bestellnummer kann direkt in die
+*& Bestellanzeige ME23N verzweigt werden.
+*&
+*& Author     : ProjectNautilus
+*& date       : 02.03.2026
+*& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
+*&              Sonstiges/others  ( )                  Modulpool   ( )
+*&
+*----------------------------------------------------------------------*
+* Änderungshistorie                                                    *
+* Datum      Benutzer:                  Grund                          *
+* ---------- ----------------- --------------------------------------- *
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+
+REPORT y_pm_order_obligo.
+
+* Selektionsbild
+PARAMETERS: p_year TYPE gjahr DEFAULT sy-datum(4).
+
+DATA: gv_aufnr TYPE aufnr,
+      gv_auart TYPE auart,
+      gv_iwerk TYPE afih-iwerk.
+
+SELECT-OPTIONS: s_aufnr FOR gv_aufnr,
+                s_auart FOR gv_auart,
+                s_iwerk FOR gv_iwerk.
+
+* Konstanten
+CONSTANTS: c_stat_teco TYPE jest-stat VALUE 'I0045'. " TECO (TABG)
+* Typen
+TYPES: BEGIN OF ty_order,
+         aufnr TYPE aufk-aufnr,
+         objnr TYPE aufk-objnr,
+         auart TYPE aufk-auart,
+         ktext TYPE aufk-ktext,
+         erdat TYPE aufk-erdat,
+         iwerk TYPE afih-iwerk,
+       END OF ty_order.
+
+TYPES: BEGIN OF ty_ekkn,
+         aufnr TYPE ekkn-aufnr,
+         ebeln TYPE ekkn-ebeln,
+         ebelp TYPE ekkn-ebelp,
+       END OF ty_ekkn.
+
+TYPES: BEGIN OF ty_openpo,
+         ebeln TYPE ekpo-ebeln,
+         ebelp TYPE ekpo-ebelp,
+       END OF ty_openpo.
+
+TYPES: BEGIN OF ty_result,
+         aufnr         TYPE aufk-aufnr,
+         auart         TYPE aufk-auart,
+         iwerk         TYPE afih-iwerk,
+         ktext         TYPE aufk-ktext,
+         erdat         TYPE aufk-erdat,
+         open_po_items TYPE i,
+         ebeln         TYPE ekko-ebeln,
+         msg           TYPE char100,
+       END OF ty_result.
+
+* Daten
+DATA: lt_orders TYPE STANDARD TABLE OF ty_order,
+      lt_teco   TYPE STANDARD TABLE OF jest-objnr,
+      lt_ekkn   TYPE STANDARD TABLE OF ty_ekkn,
+      lt_openpo TYPE STANDARD TABLE OF ty_openpo,
+      lt_res    TYPE STANDARD TABLE OF ty_result.
+
+DATA: lv_from TYPE dats,
+      lv_to   TYPE dats.
+
+DATA: ls_order TYPE ty_order,
+      ls_res   TYPE ty_result,
+      ls_ekkn  TYPE ty_ekkn,
+      ls_key   TYPE ty_openpo.
+
+DATA: lv_cnt         TYPE i,
+      lv_idx         TYPE sy-tabix,
+      lv_ebeln_first TYPE ekko-ebeln.
+
+* Für Doppelklick-Navigation
+DATA: gv_cursor_field TYPE fieldname,
+      gv_ebeln_click  TYPE ekko-ebeln.
+
+* Start
+START-OF-SELECTION.
+
+
+  CONCATENATE p_year '0101' INTO lv_from.
+  CONCATENATE p_year '1231' INTO lv_to.
+
+  CLEAR: lt_orders, lt_teco, lt_ekkn, lt_openpo, lt_res.
+
+
+  IF s_iwerk[] IS INITIAL.
+
+    SELECT aufnr objnr auart ktext erdat
+      FROM aufk
+      INTO TABLE lt_orders
+      WHERE aufnr IN s_aufnr
+        AND auart IN s_auart
+        AND erdat BETWEEN lv_from AND lv_to.
+
+  ELSE.
+
+    SELECT a~aufnr a~objnr a~auart a~ktext a~erdat h~iwerk
+      FROM aufk AS a
+      INNER JOIN afih AS h
+        ON h~aufnr = a~aufnr
+      INTO TABLE lt_orders
+      WHERE a~aufnr IN s_aufnr
+        AND a~auart IN s_auart
+        AND a~erdat BETWEEN lv_from AND lv_to
+        AND h~iwerk IN s_iwerk.
+
+  ENDIF.
+
+  IF lt_orders IS INITIAL.
+    MESSAGE 'Keine Aufträge im Selektionszeitraum gefunden.' TYPE 'S'.
+    EXIT.
+  ENDIF.
+
+  SORT lt_orders BY objnr aufnr.
+
+  " TECO prüfen (JEST: I0045 aktiv)
+  SELECT objnr
+    FROM jest
+    INTO TABLE lt_teco
+    FOR ALL ENTRIES IN lt_orders
+    WHERE objnr = lt_orders-objnr
+      AND stat  = c_stat_teco
+      AND inact = space.
+
+  IF lt_teco IS INITIAL.
+    MESSAGE 'Keine TECO-Aufträge in der Selektion gefunden.' TYPE 'S'.
+    EXIT.
+  ENDIF.
+
+  SORT lt_teco BY table_line.
+
+  "3) Bestellkontierungen EKKN zu den Aufträgen
+  SELECT aufnr ebeln ebelp
+    FROM ekkn
+    INTO TABLE lt_ekkn
+    FOR ALL ENTRIES IN lt_orders
+    WHERE aufnr = lt_orders-aufnr.
+
+  IF lt_ekkn IS INITIAL.
+    MESSAGE 'Keine Bestellkontierungen (EKKN) zu den selektierten Aufträgen gefunden.' TYPE 'S'.
+    EXIT.
+  ENDIF.
+
+  SORT lt_ekkn BY aufnr ebeln ebelp.
+
+
+  CLEAR lt_openpo.
+
+  SELECT ebeln ebelp
+    FROM ekpo
+    INTO TABLE lt_openpo
+    FOR ALL ENTRIES IN lt_ekkn
+    WHERE ebeln = lt_ekkn-ebeln
+      AND ebelp = lt_ekkn-ebelp
+      AND loekz = space
+      AND elikz = space.
+
+  SORT lt_openpo BY ebeln ebelp.
+  DELETE ADJACENT DUPLICATES FROM lt_openpo COMPARING ebeln ebelp.
+
+  LOOP AT lt_orders INTO ls_order.
+
+    "Nur TECO
+    READ TABLE lt_teco WITH KEY table_line = ls_order-objnr
+         TRANSPORTING NO FIELDS BINARY SEARCH.
+    IF sy-subrc <> 0.
+      CONTINUE.
+    ENDIF.
+
+       lv_cnt = 0.
+    CLEAR lv_ebeln_first.
+
+       READ TABLE lt_ekkn WITH KEY aufnr = ls_order-aufnr
+         TRANSPORTING NO FIELDS BINARY SEARCH.
+    IF sy-subrc = 0.
+
+      lv_idx = sy-tabix.
+
+      LOOP AT lt_ekkn INTO ls_ekkn FROM lv_idx.
+        IF ls_ekkn-aufnr <> ls_order-aufnr.
+          EXIT.
+        ENDIF.
+
+        ls_key-ebeln = ls_ekkn-ebeln.
+        ls_key-ebelp = ls_ekkn-ebelp.
+
+              READ TABLE lt_openpo WITH KEY ebeln = ls_key-ebeln ebelp = ls_key-ebelp
+             TRANSPORTING NO FIELDS BINARY SEARCH.
+        IF sy-subrc = 0.
+
+          lv_cnt = lv_cnt + 1.
+
+                    IF lv_ebeln_first IS INITIAL.
+            lv_ebeln_first = ls_ekkn-ebeln.
+          ENDIF.
+
+        ENDIF.
+
+      ENDLOOP.
+    ENDIF.
+
+    IF lv_cnt > 0.
+      CLEAR ls_res.
+      ls_res-aufnr         = ls_order-aufnr.
+      ls_res-auart         = ls_order-auart.
+      ls_res-iwerk         = ls_order-iwerk.
+      ls_res-ktext         = ls_order-ktext.
+      ls_res-erdat         = ls_order-erdat.
+      ls_res-open_po_items = lv_cnt.
+      ls_res-ebeln         = lv_ebeln_first.
+
+      CONCATENATE '000 Für AUF' ls_order-aufnr 'ist noch Bestellobligo vorhanden'
+                  INTO ls_res-msg SEPARATED BY space.
+
+      APPEND ls_res TO lt_res.
+    ENDIF.
+
+  ENDLOOP.
+
+  IF lt_res IS INITIAL.
+    MESSAGE 'Keine TECO-Aufträge mit offener Bestellposition gefunden.' TYPE 'S'.
+    EXIT.
+  ENDIF.
+
+    "6) Ausgabe + EBELN
+  ULINE.
+  WRITE: / 'AUFNR', 15 'AUART', 25 'IWERK', 35 'ERDAT',
+           46 'OFFENE_PO', 58 'EBELN', 70 'TEXT'.
+  ULINE.
+
+  LOOP AT lt_res INTO ls_res.
+
+    WRITE: / ls_res-aufnr,
+             15 ls_res-auart,
+             25 ls_res-iwerk,
+             35 ls_res-erdat,
+             46 ls_res-open_po_items.
+
+    "EBELN klickbar
+    FORMAT HOTSPOT ON.
+    WRITE AT 58 ls_res-ebeln.
+    FORMAT HOTSPOT OFF.
+
+    WRITE AT 70 ls_res-msg.
+
+  ENDLOOP.
+
+* Doppelklick-Navigation: Klick auf EBELN -> ME23N
+AT LINE-SELECTION.
+
+  CLEAR: gv_cursor_field, gv_ebeln_click.
+
+
+  GET CURSOR FIELD gv_cursor_field VALUE gv_ebeln_click.
+
+
+  IF gv_cursor_field CS 'EBELN' AND gv_ebeln_click IS NOT INITIAL.
+
+
+    SET PARAMETER ID 'BES' FIELD gv_ebeln_click.
+
+
+    CALL TRANSACTION 'ME23N' AND SKIP FIRST SCREEN.
+
+  ELSE.
+    MESSAGE 'Bitte doppelklicken Sie auf die Bestellnummer (EBELN), um ME23N zu öffnen.' TYPE 'S'.
+  ENDIF.
