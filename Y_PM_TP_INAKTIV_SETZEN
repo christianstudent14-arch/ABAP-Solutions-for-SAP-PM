@@ -1,0 +1,147 @@
+*&---------------------------------------------------------------------*
+*& Report  Y_PM_TP_INAKTIV_SETZEN
+*&---------------------------------------------------------------------*
+*& Setzt einen Technischen Platz und alle untergeordneten Technischen
+*& Plätze auf Systemstatus INAK (I0068).
+*& Hierarchie über IFLOT-TPLMA (Kind -> Parent).
+*&---------------------------------------------------------------------*
+REPORT Y_PM_TP_INAKTIV_SETZEN.
+
+TABLES: iflot, jest.
+
+PARAMETERS: p_tplnr TYPE iflot-tplnr OBLIGATORY,
+            p_test  AS CHECKBOX DEFAULT 'X'.
+
+TYPES: BEGIN OF ty_floc,
+         tplnr TYPE iflot-tplnr,
+         objnr TYPE iflot-objnr,
+       END OF ty_floc.
+
+DATA: lt_floc   TYPE STANDARD TABLE OF ty_floc WITH DEFAULT KEY,
+      ls_floc   TYPE ty_floc,
+      lt_queue  TYPE STANDARD TABLE OF iflot-tplnr WITH DEFAULT KEY,
+      lv_parent TYPE iflot-tplnr,
+      lv_lines  TYPE i,
+      lv_msg    TYPE c LENGTH 200,
+      lv_ok     TYPE i,
+      lv_err    TYPE i.
+
+CONSTANTS: c_inak TYPE jstat VALUE 'I0068'. "Systemstatus INAK
+
+
+* Root lesen
+CLEAR ls_floc.
+SELECT SINGLE tplnr objnr
+  INTO (ls_floc-tplnr, ls_floc-objnr)
+  FROM iflot
+  WHERE tplnr = p_tplnr.
+
+IF sy-subrc <> 0.
+  MESSAGE 'Technischer Platz nicht gefunden' TYPE 'E'.
+ENDIF.
+
+APPEND ls_floc TO lt_floc.
+APPEND p_tplnr TO lt_queue.
+
+
+* Hierarchie sammeln (BFS): Kinder über IFLOT-TPLMA
+WHILE lt_queue IS NOT INITIAL.
+
+  READ TABLE lt_queue INDEX 1 INTO lv_parent.
+  DELETE lt_queue INDEX 1.
+
+  "Direkte Kinder: IFLOT-TPLMA = Parent
+  SELECT tplnr objnr
+    INTO (ls_floc-tplnr, ls_floc-objnr)
+    FROM iflot
+    WHERE tplma = lv_parent.
+
+    READ TABLE lt_floc WITH KEY tplnr = ls_floc-tplnr TRANSPORTING NO FIELDS.
+    IF sy-subrc <> 0.
+      APPEND ls_floc TO lt_floc.
+      APPEND ls_floc-tplnr TO lt_queue.
+    ENDIF.
+
+  ENDSELECT.
+
+ENDWHILE.
+
+DESCRIBE TABLE lt_floc LINES lv_lines.
+WRITE: / 'Root       :', p_tplnr,
+       / 'Testlauf   :', p_test,
+       / 'Anzahl TPL :', lv_lines.
+ULINE.
+
+
+* Status setzen
+ LOOP AT lt_floc INTO ls_floc.
+
+  IF p_test = 'X'.
+    WRITE: / 'SIMULATION: ', ls_floc-tplnr, ' -> INAK'.
+    CONTINUE.
+  ENDIF.
+
+  PERFORM set_inak USING ls_floc-objnr CHANGING lv_msg.
+
+  IF lv_msg(2) = 'OK'.
+    lv_ok = lv_ok + 1.
+    WRITE: / 'OK  : ', ls_floc-tplnr, ' -> INAK'.
+  ELSE.
+    lv_err = lv_err + 1.
+    WRITE: / 'ERR : ', ls_floc-tplnr, ' -> ', lv_msg.
+  ENDIF.
+
+ENDLOOP.
+
+IF p_test <> 'X'.
+  COMMIT WORK AND WAIT.
+  ULINE.
+  WRITE: / 'Gespeichert. OK:', lv_ok, ' Fehler:', lv_err.
+ELSE.
+  ULINE.
+  WRITE: / 'Testlauf beendet. Keine Änderungen gespeichert.'.
+ENDIF.
+
+
+* FORM: Status setzen (INAK)
+FORM set_inak USING    p_objnr TYPE jest-objnr
+              CHANGING p_msg   TYPE c.
+
+  DATA: lv_stat    TYPE jest-stat,
+        lv_subrc_c TYPE c LENGTH 10.
+
+  CLEAR p_msg.
+
+  "Schon INAK?
+  SELECT SINGLE stat
+    INTO lv_stat
+    FROM jest
+    WHERE objnr = p_objnr
+      AND stat  = c_inak
+      AND inact = space.
+
+  IF sy-subrc = 0.
+    p_msg = 'OK (bereits INAK)'.
+    EXIT.
+  ENDIF.
+
+  CALL FUNCTION 'STATUS_CHANGE_EXTERN'
+    EXPORTING
+      objnr    = p_objnr
+      set_stat = c_inak
+      acti     = 'X'
+    EXCEPTIONS
+      object_not_found    = 1
+      status_inconsistent = 2
+      status_not_allowed  = 3
+      OTHERS              = 4.
+
+  IF sy-subrc = 0.
+    p_msg = 'OK'.
+  ELSE.
+    WRITE sy-subrc TO lv_subrc_c.
+    CONDENSE lv_subrc_c.
+    CONCATENATE 'Fehler STATUS_CHANGE_EXTERN sy-subrc=' lv_subrc_c INTO p_msg.
+  ENDIF.
+
+ENDFORM.
