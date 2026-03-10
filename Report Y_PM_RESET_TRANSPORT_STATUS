@@ -1,0 +1,57 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_RESET_TRANSPORT_STATUS
+*&---------------------------------------------------------------------*
+*& Nach Ausführung:
+*&
+*& SE01 öffnen
+*& Transport aufrufen
+*& Fehler bzgl. „EXPORT_TIMESTAMP“ ignorieren
+*& In Eigenschaften → Attribut löschen
+*& Normal freigeben
+*&---------------------------------------------------------------------*
+*& Zweck:
+*&   Öffnet einen Transportauftrag im Änderungsmodus und zeigt nach
+*&   erfolgreicher Ausführung einen Hinweis-Popup mit weiteren
+*&   manuellen Schritten an.
+*&
+*& Hinweis:
+*&   Dieser Report ist ausschließlich für das DEV-System gedacht.
+*&---------------------------------------------------------------------*
+*& Author : Student, Christian
+*& date   : 10.03.2026
+*& kind of p. : Report (x) Batch-Input ( ) Include ( )
+*&               Sonstiges/others ( ) Modulpool ( )
+*&---------------------------------------------------------------------*
+
+REPORT y_pm_reset_transport_status.
+
+PARAMETERS: p_trkorr TYPE trkorr OBLIGATORY.
+
+DATA: ls_e070   TYPE e070,
+      ls_e070c  TYPE e070c,
+      ls_e07t   TYPE e07t,
+      lt_popup  TYPE STANDARD TABLE OF char100.
+
+START-OF-SELECTION.
+
+  " DEV-Systemprüfung anhand Systemkennung
+  IF sy-sysid <> 'HWD'.
+    MESSAGE |Dieser Report darf nur im DEV-System HWD ausgeführt werden. Aktuelles System: { sy-sysid }.| TYPE 'E'.
+  ENDIF.
+
+  " Transport im Änderungsmodus öffnen UND Kopfdaten sofort mitlesen
+  CALL FUNCTION 'TRINT_DISPLAY_REQUEST_HEADER'
+    EXPORTING
+      iv_trkorr    = p_trkorr
+      iv_read_only = abap_false
+    IMPORTING
+      es_e070      = ls_e070
+      es_e070c     = ls_e070c
+      es_e07t      = ls_e07t.
+
+  " Optional: Prüfung, ob Transport wirklich existiert
+  IF ls_e070-trkorr IS INITIAL.
+    MESSAGE |Transportauftrag { p_trkorr } wurde nicht gefunden.| TYPE 'E'.
+  ENDIF.
+
+  MESSAGE |Transport { p_trkorr } wurde zur Bearbeitung geöffnet.| TYPE 'S'.
