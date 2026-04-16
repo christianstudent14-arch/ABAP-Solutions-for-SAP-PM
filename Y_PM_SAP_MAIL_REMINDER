@@ -1,0 +1,140 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_SAP_MAIL_REMINDER
+*&---------------------------------------------------------------------*
+*& Batchfähiger Report prüft SAP Business Workplace auf ungelesene
+*& Eingänge und versendet eine Mail.
+*&
+*&
+*& Author : Student, Christian
+*& date   : 16.04.2026
+*& kind of p. : Report (x) Batch-Input ( ) Include ( )
+*&               Sonstiges/others ( ) Modulpool ( )
+*&---------------------------------------------------------------------*
+*& Änderungshistorie
+*& Datum      Benutzer   Grund
+*&
+*---------------------------------------------------------------------*
+
+REPORT y_pm_sap_mail_reminder.
+
+*---------------------------------------------------------------------*
+* Selektionsbild
+*---------------------------------------------------------------------*
+PARAMETERS:
+  p_uname TYPE syuname OBLIGATORY DEFAULT sy-uname,
+  p_email TYPE adr6-smtp_addr OBLIGATORY.
+
+*---------------------------------------------------------------------*
+* Datendeklarationen
+*---------------------------------------------------------------------*
+DATA:
+  lv_has_wi  TYPE abap_bool VALUE abap_false,
+  lv_has_doc TYPE abap_bool VALUE abap_false.
+
+*---------------------------------------------------------------------*
+* Start-of-selection
+*---------------------------------------------------------------------*
+START-OF-SELECTION.
+
+  PERFORM check_open_workitems.
+  PERFORM check_unread_documents.
+
+  IF lv_has_wi = abap_true OR lv_has_doc = abap_true.
+    PERFORM send_mail.
+  ENDIF.
+
+*---------------------------------------------------------------------*
+* Offene Workflow-Workitems prüfen
+*---------------------------------------------------------------------*
+FORM check_open_workitems.
+
+  CLEAR lv_has_wi.
+
+  SELECT SINGLE wi_id
+    FROM swwwihead
+    WHERE wi_stat   = 'READY'
+      AND wi_aagent = @p_uname
+    INTO @DATA(lv_dummy_wi).
+
+  IF sy-subrc = 0.
+    lv_has_wi = abap_true.
+  ENDIF.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+* Ungelesene Dokumente im Business Workplace prüfen
+*---------------------------------------------------------------------*
+FORM check_unread_documents.
+
+  CLEAR lv_has_doc.
+
+  SELECT SINGLE recnam
+    FROM soos
+    WHERE recnam = @p_uname
+      AND objrd  <> 'X'   " alles, was nicht gelesen ist
+    INTO @DATA(lv_dummy_doc).
+
+  IF sy-subrc = 0.
+    lv_has_doc = abap_true.
+  ENDIF.
+
+ENDFORM.
+
+*---------------------------------------------------------------------*
+* Erinnerungs-Mail senden
+*---------------------------------------------------------------------*
+FORM send_mail.
+
+  DATA:
+    lo_send_request TYPE REF TO cl_bcs,
+    lo_document     TYPE REF TO cl_document_bcs,
+    lo_recipient    TYPE REF TO if_recipient_bcs,
+    lt_text         TYPE bcsy_text.
+
+  TRY.
+
+      APPEND 'Hallo,' TO lt_text.
+      APPEND '' TO lt_text.
+      APPEND 'es gibt neue Einträge in deinem SAP Business Workplace:' TO lt_text.
+      APPEND '' TO lt_text.
+
+      IF lv_has_wi = abap_true.
+        APPEND '- mindestens ein offenes Workflow-Workitem' TO lt_text.
+      ENDIF.
+
+      IF lv_has_doc = abap_true.
+        APPEND '- mindestens ein ungelesenes Dokument' TO lt_text.
+      ENDIF.
+
+      APPEND '' TO lt_text.
+      APPEND 'Bitte prüfe deinen SAP Business Workplace (SBWP).' TO lt_text.
+      APPEND '' TO lt_text.
+      APPEND 'Diese E-Mail dient nur als Erinnerung.' TO lt_text.
+
+      lo_send_request = cl_bcs=>create_persistent( ).
+
+      lo_document = cl_document_bcs=>create_document(
+        i_type    = 'RAW'
+        i_text    = lt_text
+        i_subject = 'SAP-Hinweis: Neue Einträge im Business Workplace'
+      ).
+
+      lo_send_request->set_document( lo_document ).
+
+      lo_recipient =
+        cl_cam_address_bcs=>create_internet_address( p_email ).
+
+      lo_send_request->add_recipient( lo_recipient ).
+
+      lo_send_request->send( i_with_error_screen = abap_false ).
+
+      COMMIT WORK.
+
+    CATCH cx_send_req_bcs
+          cx_address_bcs
+          cx_document_bcs.
+
+  ENDTRY.
+
+ENDFORM.
