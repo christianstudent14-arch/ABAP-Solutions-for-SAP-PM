@@ -1,0 +1,104 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_LIST_BATCH_EXPORT
+*&---------------------------------------------------------------------*
+*& Führt List-Report mit wählbarer Variante aus und
+*& exportiert als *.txt
+*& in ein wählbares Verzeichnis (muss in AL11 definiert sein).
+*&
+*&
+*& Author     : ProjectNautilus
+*& date       : 30.04.2026
+*& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
+*&              Sonstiges/others  ( )                  Modulpool   ( )
+*&
+*----------------------------------------------------------------------*
+* Änderungshistorie                                                    *
+* Datum      Benutzer:                  Grund                          *
+* ---------- ----------------- --------------------------------------- *
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+REPORT y_pm_list_batch_export NO STANDARD PAGE HEADING.
+
+
+PARAMETERS:
+  p_rep TYPE progname OBLIGATORY DEFAULT 'RKAEP000',
+  p_var TYPE raldb_vari OBLIGATORY DEFAULT 'TEST',
+  p_dir TYPE string OBLIGATORY DEFAULT '\\10.131.0.23\sap\Test\'.
+
+TYPES:
+  ty_ascii_line TYPE c LENGTH 1024.
+
+DATA:
+  lt_listobject TYPE STANDARD TABLE OF abaplist,
+  lt_asci       TYPE STANDARD TABLE OF ty_ascii_line,
+  lv_file       TYPE string,
+  lv_name       TYPE trdir-name,
+  lv_line       TYPE ty_ascii_line.
+
+* Prüfungen
+IF p_dir IS INITIAL.
+  MESSAGE 'Computer sagt nein: Zielverzeichnis darf nicht leer sein' TYPE 'E'.
+ENDIF.
+
+
+"IF p_dir+strlen( p_dir )-1 <> '\' AND
+ "  p_dir+strlen( p_dir )-1 <> '/'.
+ " MESSAGE 'Zielverzeichnis muss mit / oder \\ enden' TYPE 'E'.
+"ENDIF.
+
+SELECT SINGLE name
+  INTO lv_name
+  FROM trdir
+  WHERE name = p_rep.
+
+IF sy-subrc <> 0.
+  MESSAGE 'Computer sagt nein: Report existiert nicht' TYPE 'E'.
+ENDIF.
+
+* Dateiname erzeugen
+CONCATENATE p_dir
+            p_rep '_' sy-datum '_' sy-uzeit '.txt'
+       INTO lv_file.
+
+* Report ausführen
+SUBMIT (p_rep)
+  USING SELECTION-SET p_var
+  EXPORTING LIST TO MEMORY
+  AND RETURN.
+
+* Liste holen
+CALL FUNCTION 'LIST_FROM_MEMORY'
+  TABLES
+    listobject = lt_listobject
+  EXCEPTIONS
+    OTHERS     = 1.
+
+IF sy-subrc <> 0 OR lt_listobject IS INITIAL.
+  MESSAGE 'Computer sagt nein: Keine Listausgabe erzeugt' TYPE 'E'.
+ENDIF.
+
+* Liste nach ASCII konvertieren
+CALL FUNCTION 'LIST_TO_ASCI'
+  TABLES
+    listobject = lt_listobject
+    listasci   = lt_asci
+  EXCEPTIONS
+    OTHERS     = 1.
+
+IF sy-subrc <> 0.
+  MESSAGE 'Computer sagt nein: Fehler LIST_TO_ASCI' TYPE 'E'.
+ENDIF.
+
+* Datei schreiben
+OPEN DATASET lv_file FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
+IF sy-subrc <> 0.
+  MESSAGE 'Computer sagt nein: Zieldatei kann nicht geschrieben werden' TYPE 'E'.
+ENDIF.
+
+LOOP AT lt_asci INTO lv_line.
+  TRANSFER lv_line TO lv_file.
+ENDLOOP.
+
+CLOSE DATASET lv_file.
+
+MESSAGE 'Computer sagt: Export erfolgreich!' TYPE 'S'.
