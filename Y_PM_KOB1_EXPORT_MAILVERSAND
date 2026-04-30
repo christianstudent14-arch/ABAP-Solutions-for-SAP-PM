@@ -1,0 +1,247 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_KOB1_BATCH_EXPORT
+*&---------------------------------------------------------------------*
+*& Führt die KOB1 mit wählbarer Variante aus und exportiert als *.txt
+*& in ein wählbares Verzeichnis (muss in AL11 definiert sein).
+*& Mailversand der Export.txt optional.
+*&
+*&
+*& Author     : ProjectNautilus
+*& date       : 30.04.2026
+*& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
+*&              Sonstiges/others  ( )                  Modulpool   ( )
+*&
+*----------------------------------------------------------------------*
+* Änderungshistorie                                                    *
+* Datum      Benutzer:                  Grund                          *
+* ---------- ----------------- --------------------------------------- *
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+
+*& Hallo Programmierer:
+*& Als ich diesen Code geschrieben habe, wussten nur Gott und ich, wie er funktioniert.
+*& Jetzt weiß es nur noch Gott!
+*&
+*& Falls du also versuchst, diesen Code zu optimieren, und er dabei scheitert (höchstwahrscheinlich...),
+*& erhöhe bitte diesen Zähler als Warnung für die nächste Person:
+*&
+*& gesamtstunden_die_hier_verschwendet_wurden = 2
+
+
+REPORT Y_PM_KOB1_EXPORT_MAILVERSAND NO STANDARD PAGE HEADING.
+
+* Selektionsbild
+PARAMETERS:
+  p_var TYPE raldb_vari DEFAULT 'TEST' OBLIGATORY.
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME.
+PARAMETERS:
+  r_file RADIOBUTTON GROUP r1 DEFAULT 'X',
+  r_mail RADIOBUTTON GROUP r1.
+PARAMETERS:
+  p_dir TYPE string DEFAULT '\\10.131.0.23\sap\Test\' MODIF ID fil,
+  p_to  TYPE string LOWER CASE,
+  p_cc  TYPE string LOWER CASE.
+SELECTION-SCREEN END OF BLOCK b1.
+
+
+* Typen & Daten
+TYPES:
+  ty_ascii_line TYPE c LENGTH 1024.
+
+DATA:
+  lt_listobject TYPE STANDARD TABLE OF abaplist,
+  lt_asci       TYPE STANDARD TABLE OF ty_ascii_line.
+
+* Selektionsbild-Logik
+AT SELECTION-SCREEN OUTPUT.
+  LOOP AT SCREEN.
+    IF screen-group1 = 'FIL'.
+      screen-active = COND #( WHEN r_file = 'X' THEN 1 ELSE 0 ).
+      MODIFY SCREEN.
+    ENDIF.
+  ENDLOOP.
+
+  IF r_mail = 'X' AND p_to IS INITIAL AND p_cc IS INITIAL.
+    MESSAGE 'Mailversand aktiv, aber weder TO noch CC ist gefüllt.' TYPE 'E'.
+  ENDIF.
+
+* Start
+START-OF-SELECTION.
+
+  PERFORM execute_kob1.
+  PERFORM list_to_ascii.
+
+  IF r_file = 'X'.
+    PERFORM export_to_file.
+  ELSE.
+    PERFORM send_mail.
+  ENDIF.
+
+* KOB1 ausführen
+FORM execute_kob1.
+
+  SUBMIT rkaep000
+    USING SELECTION-SET p_var
+    EXPORTING LIST TO MEMORY
+    AND RETURN.
+
+  CALL FUNCTION 'LIST_FROM_MEMORY'
+    TABLES
+      listobject = lt_listobject
+    EXCEPTIONS
+      OTHERS = 1.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Keine Liste aus RKAEP000 gelesen' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
+
+* Liste -> ASCII
+FORM list_to_ascii.
+
+  CALL FUNCTION 'LIST_TO_ASCI'
+    TABLES
+      listobject = lt_listobject
+      listasci   = lt_asci
+    EXCEPTIONS
+      OTHERS     = 1.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Fehler bei LIST_TO_ASCI' TYPE 'E'.
+  ENDIF.
+
+ENDFORM.
+
+* Datei-Export
+FORM export_to_file.
+
+  DATA lv_file TYPE string.
+
+  lv_file =
+    p_dir && 'KOB1_' && sy-datum && '_' && sy-uzeit && '.txt'.
+
+  OPEN DATASET lv_file FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
+  IF sy-subrc <> 0.
+    MESSAGE |Zieldatei nicht schreibbar: { lv_file }| TYPE 'E'.
+  ENDIF.
+
+  LOOP AT lt_asci INTO DATA(lv_line).
+    TRANSFER lv_line TO lv_file.
+  ENDLOOP.
+
+  CLOSE DATASET lv_file.
+
+ENDFORM.
+
+*  Empfängerlisten mit ;
+FORM add_recipients_bcs
+  USING io_send_request TYPE REF TO cl_bcs
+        iv_list         TYPE string
+        iv_copy         TYPE c.
+
+  DATA:
+    lt_tokens TYPE STANDARD TABLE OF string,
+    lv_token  TYPE string,
+    lv_list   TYPE string,
+    lv_mail   TYPE ad_smtpadr.
+
+  IF iv_list IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  lv_list = iv_list.
+  REPLACE ALL OCCURRENCES OF ',' IN lv_list WITH ';'.
+  SPLIT lv_list AT ';' INTO TABLE lt_tokens.
+
+  LOOP AT lt_tokens INTO lv_token.
+    CONDENSE lv_token NO-GAPS.
+    IF lv_token IS INITIAL.
+      CONTINUE.
+    ENDIF.
+
+    lv_mail = lv_token.
+    TRY.
+        io_send_request->add_recipient(
+          i_recipient = cl_cam_address_bcs=>create_internet_address( lv_mail )
+          i_copy      = iv_copy ).
+      CATCH cx_bcs.
+    ENDTRY.
+  ENDLOOP.
+
+ENDFORM.
+
+* Mailversand
+FORM send_mail.
+
+  DATA:
+    lo_send_request TYPE REF TO cl_bcs,
+    lo_document     TYPE REF TO cl_document_bcs,
+    lx_bcs          TYPE REF TO cx_bcs,
+
+    lt_html_body TYPE bcsy_text,
+    lv_subject   TYPE so_obj_des,
+    lt_attach    TYPE solix_tab,
+    lv_xstring   TYPE xstring,
+    lv_size      TYPE so_obj_len.
+
+  DATA:
+    lv_text_all TYPE string,
+    lv_line     TYPE string.
+
+  APPEND '<html><body></body></html>' TO lt_html_body.
+
+  lv_subject = |KOB1-Export Variante { p_var } { sy-datum } { sy-uzeit }|.
+
+  CLEAR lv_text_all.
+
+  LOOP AT lt_asci INTO DATA(ls_ascii).
+    lv_line = ls_ascii.
+    CONCATENATE lv_text_all lv_line cl_abap_char_utilities=>newline
+      INTO lv_text_all.
+  ENDLOOP.
+
+  CALL FUNCTION 'SCMS_STRING_TO_XSTRING'
+    EXPORTING
+      text   = lv_text_all
+    IMPORTING
+      buffer = lv_xstring.
+
+  CALL FUNCTION 'SCMS_XSTRING_TO_BINARY'
+    EXPORTING
+      buffer     = lv_xstring
+    TABLES
+      binary_tab = lt_attach.
+
+  lv_size = xstrlen( lv_xstring ).
+
+  TRY.
+      lo_send_request = cl_bcs=>create_persistent( ).
+
+      lo_document = cl_document_bcs=>create_document(
+        i_type    = 'HTM'
+        i_text    = lt_html_body
+        i_subject = lv_subject ).
+
+      lo_document->add_attachment(
+        i_attachment_type    = 'TXT'
+        i_attachment_subject = 'KOB1_Export.txt'
+        i_attachment_size    = lv_size
+        i_att_content_hex    = lt_attach ).
+
+      lo_send_request->set_document( lo_document ).
+
+      PERFORM add_recipients_bcs USING lo_send_request p_to space.
+      PERFORM add_recipients_bcs USING lo_send_request p_cc 'X'.
+
+      lo_send_request->set_send_immediately( abap_true ).
+      lo_send_request->send( ).
+
+      COMMIT WORK.
+
+    CATCH cx_bcs INTO lx_bcs.
+      MESSAGE lx_bcs->get_text( ) TYPE 'E'.
+  ENDTRY.
+
+ENDFORM.
