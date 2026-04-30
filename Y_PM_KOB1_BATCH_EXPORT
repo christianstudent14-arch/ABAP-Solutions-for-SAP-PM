@@ -1,0 +1,79 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_KOB1_BATCH_EXPORT
+*&---------------------------------------------------------------------*
+*& Führt die KOB1 mit wählbarer Variante aus und exportiert als *.txt
+*& in ein wählbares Verzeichnis (muss in AL11 definiert sein).
+*&
+*&
+*& Author     : ProjectNautilus
+*& date       : 23.04.2026
+*& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
+*&              Sonstiges/others  ( )                  Modulpool   ( )
+*&
+*----------------------------------------------------------------------*
+* Änderungshistorie                                                    *
+* Datum      Benutzer:                  Grund                          *
+* ---------- ----------------- --------------------------------------- *
+*&---------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+
+REPORT Y_PM_KOB1_BATCH_EXPORT NO STANDARD PAGE HEADING.
+
+PARAMETERS:
+  p_var TYPE raldb_vari DEFAULT 'TEST' OBLIGATORY,
+  p_dir TYPE string     DEFAULT '\\10.131.0.23\sap\Test\' OBLIGATORY.
+
+TYPES:
+  ty_ascii_line TYPE c LENGTH 1024.
+
+DATA:
+  lt_listobject TYPE STANDARD TABLE OF abaplist,
+  lt_asci       TYPE STANDARD TABLE OF ty_ascii_line,
+  lv_file       TYPE string.
+
+
+lv_file =
+  p_dir &&
+  'KOB1_' &&
+  sy-datum && '_' && sy-uzeit && '.txt'.
+
+SUBMIT rkaep000
+  USING SELECTION-SET p_var
+  EXPORTING LIST TO MEMORY
+  AND RETURN.
+
+CALL FUNCTION 'LIST_FROM_MEMORY'
+  TABLES
+    listobject = lt_listobject
+  EXCEPTIONS
+    OTHERS = 1.
+
+IF sy-subrc <> 0.
+  MESSAGE 'Keine Liste aus RKAEP000 gelesen' TYPE 'E'.
+ENDIF.
+
+
+CALL FUNCTION 'LIST_TO_ASCI'
+  TABLES
+    listobject = lt_listobject
+    listasci   = lt_asci
+  EXCEPTIONS
+    OTHERS     = 1.
+
+IF sy-subrc <> 0.
+  MESSAGE 'Fehler bei LIST_TO_ASCI' TYPE 'E'.
+ENDIF.
+
+
+OPEN DATASET lv_file FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
+IF sy-subrc <> 0.
+  MESSAGE |Zieldatei nicht geschrieben: { lv_file }| TYPE 'E'.
+ENDIF.
+
+LOOP AT lt_asci INTO DATA(lv_line).
+  TRANSFER lv_line TO lv_file.
+ENDLOOP.
+
+CLOSE DATASET lv_file.
+
+MESSAGE |KOB1-Export hat hingehauen: { lv_file }| TYPE 'S'.
