@@ -2,9 +2,7 @@
 *& Report Y_PM_DELETE_FILE
 *&
 *&---------------------------------------------------------------------*
-*& Löscht Dateien aus einen Zielverzeichnis.
-*&
-*&
+*& Löscht Dateien aus einem Zielverzeichnis.
 *&
 *& Author     : ProjectNautilus
 *& date       : 07.10.2025
