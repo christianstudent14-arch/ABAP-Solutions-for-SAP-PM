@@ -37,7 +37,7 @@
 *&     - Dialogbetrieb (GUI_UPLOAD)
 *&     - Zielverzeichnisse sind in AL11 erreichbar und Schreibrechte vorhanden (S_DATASET)
 *&-------------------------------------------------------------------------------------------*
-*& Author     : ProjectNautilus101
+*& Author     : ProjectNautilus
 *& date       : 20.02.2026
 *& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
 *&              Sonstiges/others  ( )                  Modulpool   ( )
