@@ -1,0 +1,461 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_AUSMUSTERUNG_TP
+*&---------------------------------------------------------------------*
+*&
+*& Technische Plätze umhängen, änderen, anlegen.
+*&
+*& Autor     : Student, Christian
+*& Datum     : 21.05.2026
+*& kind of p. : Report (x) Batch-Input ( ) Include ( )
+*& Sonstiges/others ( ) Modulpool ( )
+*&---------------------------------------------------------------------*
+*& Änderungshistorie
+*& Datum     Benutzer   Grund
+*&---------------------------------------------------------------------*
+
+REPORT y_pm_ausmusterung_tp.
+
+TABLES: iflot.
+
+TYPES: BEGIN OF ty_item,
+         tplnr_int TYPE iflot-tplnr,                "internes Format (für IFLOT/BAPI_CHANGE)
+         tplnr_ext TYPE bapi_itob_parms-funcloc,    "externes Label (für BAPI_CREATE)
+         descript  TYPE ktx01,                      "40 Zeichen
+       END OF ty_item.
+
+DATA: gt_items TYPE STANDARD TABLE OF ty_item WITH DEFAULT KEY.
+
+SELECTION-SCREEN BEGIN OF BLOCK b1 WITH FRAME.
+PARAMETERS: rb_rep RADIOBUTTON GROUP g1 DEFAULT 'X',
+            rb_ren RADIOBUTTON GROUP g1,
+            rb_cre RADIOBUTTON GROUP g1.
+
+PARAMETERS: p_test  AS CHECKBOX DEFAULT 'X'.
+PARAMETERS: p_dbg   AS CHECKBOX DEFAULT 'X'. "DEBUG an/aus
+SELECTION-SCREEN SKIP.
+
+"Ziel (für Umhängen + Anlegen)
+PARAMETERS: p_super TYPE iflot-tplnr.
+
+SELECTION-SCREEN SKIP.
+
+"Technische Plätze (Eingabe wie in IL01/IL02)
+PARAMETERS: p_tp01 TYPE iflot-tplnr.
+PARAMETERS: p_tp02 TYPE iflot-tplnr.
+PARAMETERS: p_tp03 TYPE iflot-tplnr.
+PARAMETERS: p_tp04 TYPE iflot-tplnr.
+PARAMETERS: p_tp05 TYPE iflot-tplnr.
+PARAMETERS: p_tp06 TYPE iflot-tplnr.
+PARAMETERS: p_tp07 TYPE iflot-tplnr.
+PARAMETERS: p_tp08 TYPE iflot-tplnr.
+PARAMETERS: p_tp09 TYPE iflot-tplnr.
+PARAMETERS: p_tp10 TYPE iflot-tplnr.
+
+SELECTION-SCREEN SKIP.
+
+"Neue Bezeichnungen (40 Zeichen)
+PARAMETERS: p_tx01 TYPE ktx01.
+PARAMETERS: p_tx02 TYPE ktx01.
+PARAMETERS: p_tx03 TYPE ktx01.
+PARAMETERS: p_tx04 TYPE ktx01.
+PARAMETERS: p_tx05 TYPE ktx01.
+PARAMETERS: p_tx06 TYPE ktx01.
+PARAMETERS: p_tx07 TYPE ktx01.
+PARAMETERS: p_tx08 TYPE ktx01.
+PARAMETERS: p_tx09 TYPE ktx01.
+PARAMETERS: p_tx10 TYPE ktx01.
+SELECTION-SCREEN END OF BLOCK b1.
+
+AT SELECTION-SCREEN.
+  PERFORM validate_selection.
+
+START-OF-SELECTION.
+  " Normalisiere Ziel (extern -> intern) falls gefüllt
+  PERFORM normalize_tplnr CHANGING p_super.
+
+  PERFORM collect_items.
+
+  IF gt_items IS INITIAL.
+    WRITE: / 'Keine Technischen Plätze angegeben.'.
+    EXIT.
+  ENDIF.
+
+  IF rb_rep = 'X'.
+    PERFORM do_reparent.
+  ELSEIF rb_ren = 'X'.
+    PERFORM do_rename.
+  ELSE.
+    PERFORM do_create.
+  ENDIF.
+
+  IF p_test IS INITIAL.
+    CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+      EXPORTING
+        wait = 'X'.
+    WRITE: / 'COMMIT ausgeführt.'.
+  ELSE.
+    CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'.
+    WRITE: / 'Testlauf: ROLLBACK ausgeführt (keine Änderungen gespeichert).'.
+  ENDIF.
+
+
+FORM validate_selection.
+
+  IF p_tp01 IS INITIAL AND p_tp02 IS INITIAL AND p_tp03 IS INITIAL AND p_tp04 IS INITIAL AND p_tp05 IS INITIAL AND
+     p_tp06 IS INITIAL AND p_tp07 IS INITIAL AND p_tp08 IS INITIAL AND p_tp09 IS INITIAL AND p_tp10 IS INITIAL.
+    MESSAGE 'Bitte mindestens einen Technischen Platz eingeben.' TYPE 'E'.
+  ENDIF.
+
+  IF rb_rep = 'X'.
+    IF p_super IS INITIAL.
+      MESSAGE 'Für Umhängen bitte einen übergeordneten Technischen Platz (p_super) angeben.' TYPE 'E'.
+    ENDIF.
+
+  ELSEIF rb_ren = 'X'.
+
+    IF p_tx01 IS INITIAL AND p_tx02 IS INITIAL AND p_tx03 IS INITIAL AND p_tx04 IS INITIAL AND p_tx05 IS INITIAL AND
+       p_tx06 IS INITIAL AND p_tx07 IS INITIAL AND p_tx08 IS INITIAL AND p_tx09 IS INITIAL AND p_tx10 IS INITIAL.
+      MESSAGE 'Für Neu bezeichnen bitte mindestens eine neue Bezeichnung (p_tx..) angeben.' TYPE 'E'.
+    ENDIF.
+
+  ELSE.
+    "Create: Ziel erforderlich
+    IF p_super IS INITIAL.
+      MESSAGE 'Für Neu anlegen bitte einen übergeordneten Technischen Platz (p_super) angeben.' TYPE 'E'.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+
+
+FORM normalize_tplnr CHANGING cv_tplnr TYPE iflot-tplnr.
+  DATA lv_tplnr TYPE iflot-tplnr.
+
+  IF cv_tplnr IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  lv_tplnr = cv_tplnr.
+
+  CALL FUNCTION 'CONVERSION_EXIT_TPLNR_INPUT'
+    EXPORTING
+      input  = lv_tplnr
+    IMPORTING
+      output = lv_tplnr.
+
+  cv_tplnr = lv_tplnr.
+ENDFORM.
+
+
+FORM exists_iflot USING    iv_tplnr TYPE iflot-tplnr
+                  CHANGING cv_exist TYPE abap_bool.
+
+  DATA lv_tplnr TYPE iflot-tplnr.
+
+  CLEAR cv_exist.
+
+  SELECT SINGLE tplnr
+    INTO lv_tplnr
+    FROM iflot
+    WHERE tplnr = iv_tplnr.
+
+  IF sy-subrc = 0.
+    cv_exist = abap_true.
+  ELSE.
+    cv_exist = abap_false.
+  ENDIF.
+
+ENDFORM.
+
+
+FORM collect_items.
+  CLEAR gt_items.
+
+  PERFORM add_item USING p_tp01 p_tx01.
+  PERFORM add_item USING p_tp02 p_tx02.
+  PERFORM add_item USING p_tp03 p_tx03.
+  PERFORM add_item USING p_tp04 p_tx04.
+  PERFORM add_item USING p_tp05 p_tx05.
+  PERFORM add_item USING p_tp06 p_tx06.
+  PERFORM add_item USING p_tp07 p_tx07.
+  PERFORM add_item USING p_tp08 p_tx08.
+  PERFORM add_item USING p_tp09 p_tx09.
+  PERFORM add_item USING p_tp10 p_tx10.
+
+  SORT gt_items BY tplnr_int.
+  DELETE ADJACENT DUPLICATES FROM gt_items COMPARING tplnr_int.
+ENDFORM.
+
+FORM add_item USING iv_tplnr TYPE iflot-tplnr
+                    iv_desc  TYPE ktx01.
+
+  DATA: ls_item TYPE ty_item,
+        lv_int  TYPE iflot-tplnr,
+        lv_ext  TYPE bapi_itob_parms-funcloc.
+
+  IF iv_tplnr IS INITIAL.
+    RETURN.
+  ENDIF.
+
+  "Externes Label exakt übernehmen (für CREATE)
+  lv_ext = iv_tplnr.
+  ls_item-tplnr_ext = lv_ext.
+
+  "Internes Format für Checks/BAPI_CHANGE erzeugen
+  lv_int = iv_tplnr.
+  PERFORM normalize_tplnr CHANGING lv_int.
+  ls_item-tplnr_int = lv_int.
+
+  ls_item-descript = iv_desc.
+
+  APPEND ls_item TO gt_items.
+ENDFORM.
+
+
+FORM dump_bapiret2 USING is_ret TYPE bapiret2.
+  DATA lv_fulltext TYPE string.
+
+  WRITE: / 'RETURN:', is_ret-type, is_ret-id, is_ret-number, is_ret-message.
+  WRITE: / 'V1..V4:', is_ret-message_v1, is_ret-message_v2, is_ret-message_v3, is_ret-message_v4.
+
+  IF is_ret-id IS NOT INITIAL AND is_ret-number IS NOT INITIAL.
+    CALL FUNCTION 'MESSAGE_TEXT_BUILD'
+      EXPORTING
+        msgid               = is_ret-id
+        msgnr               = is_ret-number
+        msgv1               = is_ret-message_v1
+        msgv2               = is_ret-message_v2
+        msgv3               = is_ret-message_v3
+        msgv4               = is_ret-message_v4
+      IMPORTING
+        message_text_output = lv_fulltext
+      EXCEPTIONS
+        OTHERS              = 1.
+    IF sy-subrc = 0 AND lv_fulltext IS NOT INITIAL.
+      WRITE: / 'FULLTEXT:', lv_fulltext.
+    ENDIF.
+  ENDIF.
+ENDFORM.
+
+
+FORM do_reparent.
+  DATA: ls_gen   TYPE bapi_itob,
+        ls_genx  TYPE bapi_itobx,
+        ls_spec  TYPE bapi_itob_fl_only,
+        ls_specx TYPE bapi_itob_fl_onlyx,
+        ls_ret   TYPE bapiret2.
+
+  DATA: lv_exists TYPE abap_bool.
+
+  "Ziel existiert?
+  PERFORM exists_iflot USING p_super CHANGING lv_exists.
+  IF lv_exists = abap_false.
+    WRITE: / 'FEHLER: Ziel (p_super) existiert nicht in IFLOT:', p_super.
+    RETURN.
+  ENDIF.
+
+  LOOP AT gt_items INTO DATA(ls_item).
+
+    PERFORM exists_iflot USING ls_item-tplnr_int CHANGING lv_exists.
+    IF lv_exists = abap_false.
+      WRITE: / ls_item-tplnr_int, 35, 'FEHLER: TP existiert nicht (IFLOT).'.
+      CONTINUE.
+    ENDIF.
+
+    CLEAR: ls_gen, ls_genx, ls_spec, ls_specx, ls_ret.
+
+    "SUPFLOC in BAPI_ITOB_FL_ONLY
+    ls_spec-supfloc  = p_super.
+    ls_specx-supfloc = 'X'.
+
+    CALL FUNCTION 'BAPI_FUNCLOC_CHANGE'
+      EXPORTING
+        functlocation  = ls_item-tplnr_int
+        data_general   = ls_gen
+        data_generalx  = ls_genx
+        data_specific  = ls_spec
+        data_specificx = ls_specx
+      IMPORTING
+        return         = ls_ret.
+
+    PERFORM write_result USING ls_item-tplnr_int ls_item-descript ls_ret.
+
+    IF p_dbg = 'X'.
+      WRITE: / 'DBG REPARENT tpl_int=', ls_item-tplnr_int, ' sup=', p_super.
+      PERFORM dump_bapiret2 USING ls_ret.
+      ULINE.
+    ENDIF.
+
+  ENDLOOP.
+ENDFORM.
+
+
+FORM do_rename.
+  DATA: ls_gen   TYPE bapi_itob,
+        ls_genx  TYPE bapi_itobx,
+        ls_spec  TYPE bapi_itob_fl_only,
+        ls_specx TYPE bapi_itob_fl_onlyx,
+        ls_ret   TYPE bapiret2.
+
+  DATA lv_exists TYPE abap_bool.
+
+  LOOP AT gt_items INTO DATA(ls_item).
+
+    PERFORM exists_iflot USING ls_item-tplnr_int CHANGING lv_exists.
+    IF lv_exists = abap_false.
+      WRITE: / ls_item-tplnr_int, 35, 'FEHLER: TP existiert nicht (IFLOT).'.
+      CONTINUE.
+    ENDIF.
+
+    IF ls_item-descript IS INITIAL.
+      WRITE: / ls_item-tplnr_int, 35, 'ÜBERSPRUNGEN: keine neue Bezeichnung (p_tx..) angegeben.'.
+      CONTINUE.
+    ENDIF.
+
+    CLEAR: ls_gen, ls_genx, ls_spec, ls_specx, ls_ret.
+
+    "Bezeichnung: BAPI_ITOB-DESCRIPT (KTX01, 40 Zeichen)
+    ls_gen-descript  = ls_item-descript.
+    ls_genx-descript = 'X'.
+
+    CALL FUNCTION 'BAPI_FUNCLOC_CHANGE'
+      EXPORTING
+        functlocation  = ls_item-tplnr_int
+        data_general   = ls_gen
+        data_generalx  = ls_genx
+        data_specific  = ls_spec
+        data_specificx = ls_specx
+      IMPORTING
+        return         = ls_ret.
+
+    PERFORM write_result USING ls_item-tplnr_int ls_item-descript ls_ret.
+
+    IF p_dbg = 'X'.
+      WRITE: / 'DBG RENAME tpl_int=', ls_item-tplnr_int, ' new_text=', ls_item-descript.
+      PERFORM dump_bapiret2 USING ls_ret.
+      ULINE.
+    ENDIF.
+
+  ENDLOOP.
+ENDFORM.
+
+
+FORM do_create.
+  DATA: ls_gen      TYPE bapi_itob,
+        ls_spec     TYPE bapi_itob_fl_only,
+        ls_gen_exp  TYPE bapi_itob,
+        ls_spec_exp TYPE bapi_itob_fl_only,
+        ls_ret      TYPE bapiret2,
+        lv_new_int  TYPE bapi_itob_parms-funcloc_int.
+
+  DATA: lv_exists TYPE abap_bool,
+        lv_tplkz  TYPE iflot-tplkz,
+        lv_fltyp  TYPE iflot-fltyp.
+
+  "Ziel existiert?
+  PERFORM exists_iflot USING p_super CHANGING lv_exists.
+  IF lv_exists = abap_false.
+    WRITE: / 'FEHLER: Ziel (p_super) existiert nicht in IFLOT:', p_super.
+    RETURN.
+  ENDIF.
+
+  "Kontext vom Parent übernehmen (Strukturkennzeichen + Typ)
+  CLEAR: lv_tplkz, lv_fltyp.
+  SELECT SINGLE tplkz fltyp
+    INTO (lv_tplkz, lv_fltyp)
+    FROM iflot
+    WHERE tplnr = p_super.
+
+  IF sy-subrc <> 0.
+    WRITE: / 'FEHLER: Parent nicht in IFLOT gefunden:', p_super.
+    RETURN.
+  ENDIF.
+
+  LOOP AT gt_items INTO DATA(ls_item).
+
+
+    PERFORM exists_iflot USING ls_item-tplnr_int CHANGING lv_exists.
+    IF lv_exists = abap_true.
+      WRITE: / ls_item-tplnr_int, 35, 'ÜBERSPRUNGEN: TP existiert bereits.'.
+      CONTINUE.
+    ENDIF.
+
+    CLEAR: ls_gen, ls_spec, ls_gen_exp, ls_spec_exp, ls_ret, lv_new_int.
+
+    "Bezeichnung setzen
+    IF ls_item-descript IS NOT INITIAL.
+      ls_gen-descript = ls_item-descript.
+    ENDIF.
+
+    "Superior + Strukturkontext setzen (BAPI_ITOB_FL_ONLY)
+    ls_spec-supfloc  = p_super.
+    ls_spec-strind   = lv_tplkz. "Strukturkennzeichen (TPLKZ)
+    ls_spec-category = lv_fltyp. "Typ techn. Platz (FLTYP)
+
+    IF p_dbg = 'X'.
+      WRITE: / '--- DEBUG CREATE ---'.
+      WRITE: / 'p_super (intern):', p_super, ' len=', strlen( p_super ).
+      WRITE: / 'SUPFLOC (ls_spec):', ls_spec-supfloc, ' len=', strlen( ls_spec-supfloc ).
+      WRITE: / 'STRIND (ls_spec):', ls_spec-strind, ' CATEGORY (ls_spec):', ls_spec-category.
+      WRITE: / 'external_number (ext):', ls_item-tplnr_ext, ' len=', strlen( ls_item-tplnr_ext ).
+      WRITE: / 'tplnr_int (intern):', ls_item-tplnr_int, ' len=', strlen( ls_item-tplnr_int ).
+      WRITE: / 'descript:', ls_item-descript.
+    ENDIF.
+
+
+    CALL FUNCTION 'BAPI_FUNCLOC_CREATE'
+      EXPORTING
+        external_number   = ls_item-tplnr_ext
+        labeling_system   = space
+        data_general      = ls_gen
+        data_specific     = ls_spec
+        automatic_install = space
+      IMPORTING
+        functlocation     = lv_new_int
+        data_general_exp  = ls_gen_exp
+        data_specific_exp = ls_spec_exp
+        return            = ls_ret.
+
+    IF p_dbg = 'X'.
+      PERFORM dump_bapiret2 USING ls_ret.
+      ULINE.
+    ENDIF.
+
+    IF ls_ret-type = 'E' OR ls_ret-type = 'A'.
+      WRITE: / ls_item-tplnr_ext, 35, 'FEHLER:', ls_ret-id, ls_ret-number, ls_ret-message.
+    ELSEIF ls_ret-type = 'W'.
+      WRITE: / ls_item-tplnr_ext, 35, 'WARNUNG:', ls_ret-message.
+    ELSE.
+      WRITE: / ls_item-tplnr_ext, 35, 'OK: Neu angelegt (INT):', lv_new_int.
+    ENDIF.
+
+  ENDLOOP.
+ENDFORM.
+
+
+FORM write_result USING iv_tplnr TYPE iflot-tplnr
+                        iv_desc  TYPE ktx01
+                        is_ret   TYPE bapiret2.
+
+  IF is_ret-type = 'E' OR is_ret-type = 'A'.
+    WRITE: / iv_tplnr, 35, 'FEHLER:', is_ret-id, is_ret-number, is_ret-message.
+    RETURN.
+  ENDIF.
+
+  IF is_ret-type = 'W'.
+    WRITE: / iv_tplnr, 35, 'WARNUNG:', is_ret-message.
+    RETURN.
+  ENDIF.
+
+  IF rb_rep = 'X'.
+    WRITE: / iv_tplnr, 35, 'OK: Übergeordnet ->', p_super.
+  ELSEIF rb_ren = 'X'.
+    IF iv_desc IS NOT INITIAL.
+      WRITE: / iv_tplnr, 35, 'OK: Bezeichnung ->', iv_desc.
+    ELSE.
+      WRITE: / iv_tplnr, 35, 'OK: Bezeichnung geändert.'.
+    ENDIF.
+  ELSE.
+    WRITE: / iv_tplnr, 35, 'OK.'.
+  ENDIF.
+
+ENDFORM.
