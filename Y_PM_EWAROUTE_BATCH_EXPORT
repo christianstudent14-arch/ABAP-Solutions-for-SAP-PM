@@ -1,0 +1,116 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_EWAROUTE_BATCH_EXPORT
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+*& Führt /1BCDWB/DBEWAROUTE aus und exportiert die
+*& erzeugte Liste als *.txt in ein wählbares Verzeichnis (AL11).
+*&
+*& Author : Student, Christian (Pattern übernommen)
+*& Date   : 21.05.2026
+*&---------------------------------------------------------------------*
+
+REPORT y_pm_ewaroute_batch_export NO STANDARD PAGE HEADING.
+
+PARAMETERS:
+  p_dir  TYPE string LOWER CASE OBLIGATORY DEFAULT '\\**.**.***.**\XCHG\SAP\HWP\',
+  p_file TYPE string LOWER CASE OBLIGATORY DEFAULT 'EWAROUTE_Export.txt'.
+
+TYPES:
+  ty_ascii_line TYPE c LENGTH 1024.
+
+DATA:
+  lt_listobject TYPE STANDARD TABLE OF abaplist,
+  lt_asci       TYPE STANDARD TABLE OF ty_ascii_line,
+  lv_fullpath   TYPE string.
+
+*----------------------------------------------------------------------
+* TEST LOGO AZRAEL (LOGO ALS BMP IN SE78 hochladen)
+
+DATA: go_dock    TYPE REF TO cl_gui_docking_container,
+      go_picture TYPE REF TO cl_gui_picture,
+      gv_url     TYPE c LENGTH 255.
+
+TYPES: BEGIN OF ty_bin255,
+         line TYPE x LENGTH 255,
+       END OF ty_bin255.
+DATA lt_bin TYPE STANDARD TABLE OF ty_bin255.
+
+AT SELECTION-SCREEN OUTPUT.
+
+  IF go_dock IS INITIAL.
+
+    CREATE OBJECT go_dock
+      EXPORTING
+        parent    = cl_gui_container=>screen0
+        side      = cl_gui_docking_container=>dock_at_top
+        extension = 200.
+
+    CREATE OBJECT go_picture
+      EXPORTING parent = go_dock.
+
+    cl_ssf_xsf_utilities=>get_bds_graphic_as_bmp(
+      EXPORTING
+        p_object = 'GRAPHICS'
+        p_name   = 'Z_EWROUTE_LOGO2'
+        p_id     = 'BMAP'
+        p_btype  = 'BCOL'
+      RECEIVING
+        p_bmp    = DATA(lv_bmp) ).
+
+    "XSTRING -> 255er X-Tabelle
+    DATA(lv_len) = xstrlen( lv_bmp ).
+    DATA(lv_off) = 0.
+    WHILE lv_len > 0.
+      APPEND VALUE ty_bin255( line = COND #( WHEN lv_len >= 255
+                                             THEN lv_bmp+lv_off(255)
+                                             ELSE lv_bmp+lv_off(lv_len) ) )
+        TO lt_bin.
+      lv_off = lv_off + COND i( WHEN lv_len >= 255 THEN 255 ELSE lv_len ).
+      lv_len = lv_len - 255.
+      IF lv_len < 0. lv_len = 0. ENDIF.
+    ENDWHILE.
+
+    CALL FUNCTION 'DP_CREATE_URL'
+      EXPORTING
+        type     = 'IMAGE'
+        subtype  = 'BMP'
+        size     = xstrlen( lv_bmp )
+        lifetime = 'T'
+      TABLES
+        data     = lt_bin
+      CHANGING
+        url      = gv_url.
+
+    go_picture->load_picture_from_url( url = gv_url ).
+    go_picture->set_display_mode( display_mode = go_picture->display_mode_fit ).
+
+  ENDIF.
+
+*----------------------------------------------------------------------
+
+START-OF-SELECTION.
+
+  lv_fullpath = p_dir && p_file.
+
+  SUBMIT /1bcdwb/dbewaroute
+    EXPORTING LIST TO MEMORY
+    AND RETURN.
+
+  CALL FUNCTION 'LIST_FROM_MEMORY'
+    TABLES listobject = lt_listobject.
+
+  CALL FUNCTION 'LIST_TO_ASCI'
+    TABLES
+      listobject = lt_listobject
+      listasci   = lt_asci.
+
+  OPEN DATASET lv_fullpath FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
+
+  LOOP AT lt_asci INTO DATA(lv_line).
+    TRANSFER lv_line TO lv_fullpath.
+  ENDLOOP.
+
+  CLOSE DATASET lv_fullpath.
+
+  MESSAGE |EWAROUTE-Export erfolgreich: { lv_fullpath }| TYPE 'S'.
