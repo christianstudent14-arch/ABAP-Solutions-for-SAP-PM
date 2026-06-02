@@ -4,8 +4,11 @@
 *& Führt die KOB1 mit wählbarer Variante aus und exportiert als *.txt
 *& in ein wählbares Verzeichnis (muss in AL11 definiert sein).
 *&
+*& Erweiterung:
+*& - Headerzeile in Exportdatei mit Report, Variante und Erstellungsdatum.
+*&   (Text: "Export wurde erstellt durch ABAP-Report ...")
 *&
-*& Author     : ProjectNautilus
+*& Author     : Student, Christian
 *& date       : 23.04.2026
 *& kind of p. : Report    (x)     Batch-Input ( )      Include   ( )
 *&              Sonstiges/others  ( )                  Modulpool   ( )
@@ -13,15 +16,16 @@
 *----------------------------------------------------------------------*
 * Änderungshistorie                                                    *
 * Datum      Benutzer:                  Grund                          *
-* ---------- ----------------- --------------------------------------- *
-*&---------------------------------------------------------------------*
-*&---------------------------------------------------------------------*
+* 05.05.26   Student           Selektion Dateiname hinzugefügt         *
+* 22.05.26   Student/Copilot   Headerzeile ergänzt (ohne Buchungsdatum)*
+*----------------------------------------------------------------------*
 
-REPORT Y_PM_KOB1_BATCH_EXPORT NO STANDARD PAGE HEADING.
+REPORT y_pm_kob1_batch_export NO STANDARD PAGE HEADING.
 
 PARAMETERS:
-  p_var TYPE raldb_vari DEFAULT 'TEST' OBLIGATORY,
-  p_dir TYPE string     DEFAULT '\\10.131.0.23\sap\Test\' OBLIGATORY.
+  p_var  TYPE raldb_vari DEFAULT 'ILV_N23' OBLIGATORY,
+  p_dir  TYPE string     DEFAULT '\\10.131.0.66\XCHG\SAP\' OBLIGATORY,
+  p_file TYPE string     DEFAULT 'SAP ILV N23 KOB1 2026.txt' OBLIGATORY.
 
 TYPES:
   ty_ascii_line TYPE c LENGTH 1024.
@@ -29,13 +33,15 @@ TYPES:
 DATA:
   lt_listobject TYPE STANDARD TABLE OF abaplist,
   lt_asci       TYPE STANDARD TABLE OF ty_ascii_line,
-  lv_file       TYPE string.
+  lv_file       TYPE string,
+  lv_line       TYPE ty_ascii_line,
 
+  "Header
+  lv_header     TYPE ty_ascii_line,
+  lv_date_text  TYPE c LENGTH 10,
+  lv_time_text  TYPE c LENGTH 8.
 
-lv_file =
-  p_dir &&
-  'KOB1_' &&
-  sy-datum && '_' && sy-uzeit && '.txt'.
+lv_file = p_dir && p_file.
 
 SUBMIT rkaep000
   USING SELECTION-SET p_var
@@ -49,9 +55,8 @@ CALL FUNCTION 'LIST_FROM_MEMORY'
     OTHERS = 1.
 
 IF sy-subrc <> 0.
-  MESSAGE 'Keine Liste aus RKAEP000 gelesen' TYPE 'E'.
+  MESSAGE 'Computer sagt: Keine Liste aus RKAEP000 gelesen' TYPE 'E'.
 ENDIF.
-
 
 CALL FUNCTION 'LIST_TO_ASCI'
   TABLES
@@ -61,19 +66,37 @@ CALL FUNCTION 'LIST_TO_ASCI'
     OTHERS     = 1.
 
 IF sy-subrc <> 0.
-  MESSAGE 'Fehler bei LIST_TO_ASCI' TYPE 'E'.
+  MESSAGE 'Computer sagt: Fehler bei LIST_TO_ASCI' TYPE 'E'.
 ENDIF.
 
+"--- Header (Report/Variante/Erstellungsdatum) ------------------------
+" Datum im Format dd.mm.yyyy
+CONCATENATE sy-datum+6(2) '.' sy-datum+4(2) '.' sy-datum(4) INTO lv_date_text.
+" Zeit im Format hh:mm:ss
+CONCATENATE sy-uzeit(2) ':' sy-uzeit+2(2) ':' sy-uzeit+4(2) INTO lv_time_text.
+
+CONCATENATE
+  'Export wurde erstellt durch ABAP-Report'
+  sy-repid
+  'Variante'
+  p_var
+  'am'
+  lv_date_text
+  lv_time_text
+INTO lv_header
+SEPARATED BY space.
+
+INSERT lv_header INTO lt_asci INDEX 1.
 
 OPEN DATASET lv_file FOR OUTPUT IN TEXT MODE ENCODING DEFAULT.
 IF sy-subrc <> 0.
-  MESSAGE |Zieldatei nicht geschrieben: { lv_file }| TYPE 'E'.
+  MESSAGE |Computer sagt: Zieldatei nicht geschrieben: { lv_file }| TYPE 'E'.
 ENDIF.
 
-LOOP AT lt_asci INTO DATA(lv_line).
+LOOP AT lt_asci INTO lv_line.
   TRANSFER lv_line TO lv_file.
 ENDLOOP.
 
 CLOSE DATASET lv_file.
 
-MESSAGE |KOB1-Export hat hingehauen: { lv_file }| TYPE 'S'.
+MESSAGE |Computer sagt: KOB1-Export hat hingehauen: { lv_file }| TYPE 'S'.
