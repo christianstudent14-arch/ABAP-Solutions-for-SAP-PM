@@ -1,5 +1,5 @@
 *&---------------------------------------------------------------------*
-*& Report Y_PM_RESET_TRANSPORT_STATUS
+*& Y_PM_RESET_TRANSPORT_STATUS
 *&---------------------------------------------------------------------*
 *& Nach Ausführung:
 *&
@@ -17,7 +17,7 @@
 *& Hinweis:
 *&   Dieser Report ist ausschließlich für das DEV-System gedacht.
 *&---------------------------------------------------------------------*
-*& Author : Student, Christian
+*& Author : Projekt Nautilus
 *& date   : 10.03.2026
 *& kind of p. : Report (x) Batch-Input ( ) Include ( )
 *&               Sonstiges/others ( ) Modulpool ( )
