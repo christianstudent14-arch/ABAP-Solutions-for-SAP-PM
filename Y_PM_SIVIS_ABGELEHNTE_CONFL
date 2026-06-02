@@ -1,0 +1,206 @@
+*&---------------------------------------------------------------------*
+*& Report Y_PM_SIVIS_ABGELEHNTE_CONFL
+*&---------------------------------------------------------------------*
+*& Batchfähiger Report zur überwachung der Berechtigungskonflikte.
+*& Prüft aktive und abgelehnte Konflikte in /siam/at_confl
+*& Mailversand möglich.
+*&
+*& Author : 
+*& date   : 19.05.2026
+*& kind of p. : Report (x) Batch-Input ( ) Include ( )
+*&               Sonstiges/others ( ) Modulpool ( )
+*&---------------------------------------------------------------------*
+*&
+*&---------------------------------------------------------------------*
+REPORT Y_PM_SIVIS_ABGELEHNTE_CONFL.
+
+* Selektionsbild
+PARAMETERS: p_mail TYPE adr6-smtp_addr OBLIGATORY.
+PARAMETERS: p_send AS CHECKBOX DEFAULT 'X'.
+PARAMETERS: p_test AS CHECKBOX DEFAULT ' '.
+
+
+DATA: lt_confl TYPE STANDARD TABLE OF /siam/at_confl,
+      ls_confl TYPE /siam/at_confl.
+
+DATA: lv_subject TYPE so_obj_des,
+      lv_html    TYPE string,
+      lv_count   TYPE i.
+
+
+
+START-OF-SELECTION.
+
+  PERFORM select_data CHANGING lt_confl lv_count.
+
+  IF lv_count = 0.
+    WRITE: / 'Keine Treffer für "Abgelehnt" und "Aktiv".'.
+    RETURN.
+  ENDIF.
+
+  PERFORM build_html USING lt_confl lv_count CHANGING lv_html lv_subject.
+
+  IF p_send = 'X'.
+    PERFORM send_mail USING p_mail lv_subject lv_html p_test.
+  ENDIF.
+
+  WRITE: / 'Treffer gefunden:', lv_count.
+  IF p_send = 'X' AND p_test = 'X'.
+    WRITE: / 'Testmodus: Mail wurde NICHT gesendet.'.
+  ELSEIF p_send = 'X'.
+    WRITE: / 'Mailversand wurde angestoßen.'.
+  ELSE.
+    WRITE: / 'p_send nicht gesetzt: Kein Versand.'.
+  ENDIF.
+
+
+* Selektieren
+FORM select_data CHANGING ct_confl TYPE STANDARD TABLE
+                          cv_count TYPE i.
+
+  CLEAR ct_confl.
+  CLEAR cv_count.
+
+  SELECT *
+    FROM /siam/at_confl
+    INTO TABLE ct_confl
+    WHERE mitig_stat = '2'
+      AND active     = 'X'.
+
+  DESCRIBE TABLE ct_confl LINES cv_count.
+
+ENDFORM.
+
+* HTML erzeugen
+FORM build_html USING    it_confl   TYPE STANDARD TABLE
+                         iv_count   TYPE i
+                CHANGING cv_html    TYPE string
+                         cv_subject TYPE so_obj_des.
+
+  DATA: lv_line TYPE string.
+
+  cv_subject = 'SIAM Findings: Abgelehnte Berechtigungskonflikte'.
+
+  "HTML Header
+  cv_html = '<html><head><meta charset="utf-8"></head><body style="font-family:Segoe UI,Arial,sans-serif;">'.
+  cv_html = cv_html && '<h3>SIAM Monitoring – aktive Findings</h3>'.
+  cv_html = cv_html && '<p>Filter: <b>MITIG_STAT = 2</b> und <b>ACTIVE = X</b><br>'.
+  cv_html = cv_html && 'Anzahl: <b>' && iv_count && '</b></p>'.
+
+  "Tabelle aufbauen
+  cv_html = cv_html && '<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;">'.
+  cv_html = cv_html && '<tr style="background:#f2f2f2;">'.
+  cv_html = cv_html && '<th>PROJECT</th><th>CONFLICT</th><th>DST_GROUP_ID</th><th>RUN_ID</th>'.
+  cv_html = cv_html && '<th>QUERY</th><th>PKG</th><th>AUTHNAME</th><th>AUTHTYPE</th>'.
+  cv_html = cv_html && '<th>AUTHSET</th><th>MITIG_STAT</th><th>LTEXT_CONFL</th>'.
+  cv_html = cv_html && '<th>LOG_ID</th><th>EXPIRY_DATE</th><th>ACTIVE</th>'.
+  cv_html = cv_html && '</tr>'.
+
+  LOOP AT it_confl INTO ls_confl.
+    lv_line = '<tr>'.
+
+    lv_line = lv_line && '<td>' && ls_confl-project     && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-conflict    && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-dst_group_id && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-run_id      && '</td>'.
+
+    lv_line = lv_line && '<td>' && ls_confl-query       && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-pkg         && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-authname    && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-authtype    && '</td>'.
+
+    lv_line = lv_line && '<td>' && ls_confl-authset     && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-mitig_stat  && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-ltext_confl && '</td>'.
+
+    lv_line = lv_line && '<td>' && ls_confl-log_id      && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-expiry_date && '</td>'.
+    lv_line = lv_line && '<td>' && ls_confl-active      && '</td>'.
+
+    lv_line = lv_line && '</tr>'.
+
+    cv_html = cv_html && lv_line.
+  ENDLOOP.
+
+  cv_html = cv_html && '</table>'.
+  cv_html = cv_html && '<p style="color:#666;font-size:12px;">Erzeugt am ' && sy-datum && ' ' && sy-uzeit && '.</p>'.
+  cv_html = cv_html && '</body></html>'.
+
+ENDFORM.
+
+* Mail senden
+FORM send_mail USING iv_mail    TYPE adr6-smtp_addr
+                     iv_subject TYPE so_obj_des
+                     iv_html    TYPE string
+                     iv_test    TYPE c.
+
+  DATA: lo_send_request TYPE REF TO cl_bcs,
+        lo_document     TYPE REF TO cl_document_bcs,
+        lo_recipient    TYPE REF TO if_recipient_bcs.
+
+  DATA: lt_body_soli TYPE soli_tab,
+        lt_att_soli  TYPE soli_tab,
+        lv_xstring   TYPE xstring,
+        lv_size      TYPE so_obj_len,
+        lv_filename  TYPE so_obj_des.
+
+  lv_filename = 'SIAM_Findings.html'.
+
+  "Kurzer Mailtext
+  CLEAR lt_body_soli.
+  APPEND 'Im Anhang die aktuelle Liste der abgelehnten Berechtigungskonflikte.' TO lt_body_soli.
+
+  "HTML in SOLI für Attachment umwandeln
+  CLEAR lt_att_soli.
+  CALL METHOD cl_bcs_convert=>string_to_soli
+    EXPORTING
+      iv_string = iv_html
+    RECEIVING
+      et_soli   = lt_att_soli.
+
+  "Größe berechnen
+  DESCRIBE TABLE lt_att_soli LINES lv_size.
+  lv_size = lv_size * 255.
+
+  "Send Request
+  lo_send_request = cl_bcs=>create_persistent( ).
+
+  "Dokument (Body)
+  lo_document = cl_document_bcs=>create_document(
+                  i_type    = 'RAW'
+                  i_text    = lt_body_soli
+                  i_subject = iv_subject ).
+
+  "Attachment hinzufügen (HTML)
+  lo_document->add_attachment(
+    i_attachment_type    = 'HTM'
+    i_attachment_subject = lv_filename
+    i_attachment_size    = lv_size
+    i_att_content_text   = lt_att_soli ).
+
+  lo_send_request->set_document( lo_document ).
+
+  "Sender = SAP User
+  lo_send_request->set_sender( cl_sapuser_bcs=>create( sy-uname ) ).
+
+  "Empfänger
+  lo_recipient = cl_cam_address_bcs=>create_internet_address( iv_mail ).
+  lo_send_request->add_recipient( lo_recipient ).
+
+  "Testmodus: nicht senden
+  IF iv_test = 'X'.
+    MESSAGE 'Testmodus aktiv: Mail wird nicht gesendet.' TYPE 'S'.
+    RETURN.
+  ENDIF.
+
+  "Sofortversand
+  lo_send_request->set_send_immediately( 'X' ).
+
+  "Senden
+  lo_send_request->send( i_with_error_screen = 'X' ).
+
+  COMMIT WORK.
+
+  MESSAGE 'Mail ist raus.' TYPE 'S'.
+
+ENDFORM.
